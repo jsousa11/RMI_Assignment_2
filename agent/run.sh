@@ -43,6 +43,10 @@ case $challenge in
         # Not done
         echo "Challenge 3 not implemented"
         ;;
+    4)
+        # Call agent for Challenge 4
+        python3 mainRobC4.py -h "$host" -p "$pos" -r "$robname"
+        ;;
     *)
         echo "Unknown challenge option: $challenge"
         exit 1
