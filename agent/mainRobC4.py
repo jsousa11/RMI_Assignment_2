@@ -1,33 +1,59 @@
+#!/usr/bin/python3
+import math
 import sys
-import numpy as np
 from croblink import *
 from math import *
 import xml.etree.ElementTree as ET
+from math import inf
+from astar import *
+import logging
+import numpy as np
+import itertools
 
 CELLROWS = 7
 CELLCOLS = 14
 
-class PIDController:
-    def __init__(self, Kp, Ki, Kd):
-        self.Kp = Kp
-        self.Ki = Ki
-        self.Kd = Kd
-        self.integral = 0
-        self.previous_error = 0
-    
-    def update(self, error, dt):
-        self.integral += error * dt
-        derivative = (error - self.previous_error) / dt
-        output = self.Kp * error + self.Ki * self.integral + self.Kd * derivative
-        self.previous_error = error
-        return output
-    
+
 class MyRob(CRobLinkAngs):
     def __init__(self, rob_name, rob_id, angles, host):
         CRobLinkAngs.__init__(self, rob_name, rob_id, angles, host)
-        self.current_x = 0  # Posição inicial relativa (x)
-        self.current_y = 0  # Posição inicial relativa (y)
-        self.orientation = 'RIGHT'  # Direção inicial (ajuste conforme necessário)
+        self.posList = []
+        self.errList = []
+        self.counter = 0
+        self.counter2 = 0
+        self.countergps = 0
+        self.counterfree = 0
+        self.length = 2
+        self.lengthrot = 2
+        self.objective = 0
+        self.endCycle = True
+        self.onRot = False
+        self.minus = False
+        self.South = False
+        self.maze = Lab()
+        self.last_x = 27
+        self.last_y = 13
+        self.unknown = []
+        self.known = []
+        self.path = []
+        self.searching = False
+        self.walked = [(0, 0)]
+        self.pathfollowing = False
+        self.haspath = False
+        self.beacon_coordinates = [(0, 0)]
+        self.beacon_nums = []
+        self.go_to_beacons = False
+        self.f = None
+        self.final_path = []
+        self.estimated_velocity = [(0, 0)]
+        self.pose = [(0, 0)]
+        self.WallClose = False
+        self.side_correction = False
+        self.left_detected = False
+        self.right_detected = False
+        self.go0 = False
+        self.first = True
+
 
     # In this map the center of cell (i,j), (i in 0..6, j in 0..13) is mapped to labMap[i*2][j*2].
     # to know if there is a wall on top of cell(i,j) (i in 0..5), check if the value of labMap[i*2+1][j*2] is space or not
@@ -49,11 +75,8 @@ class MyRob(CRobLinkAngs):
         while True:
             self.readSensors()
 
-            self.measures.gpsReady = True
-            self.measures.gpsDirReady = True
-
             if self.measures.endLed:
-                print(self.robName + " exiting")
+                print(self.rob_name + " exiting")
                 quit()
 
             if state == 'stop' and self.measures.start:
@@ -64,387 +87,1055 @@ class MyRob(CRobLinkAngs):
                 state = 'stop'
 
             if state == 'run':
-                if self.measures.visitingLed==True:
-                    state='wait'
-                if self.measures.ground==0:
+                if self.measures.visitingLed == True:
+                    state = 'wait'
+                if self.measures.ground == 0:
                     self.setVisitingLed(True)
                 self.wander()
-            elif state=='wait':
+            elif state == 'wait':
                 self.setReturningLed(True)
-                if self.measures.visitingLed==True:
+                if self.measures.visitingLed == True:
                     self.setVisitingLed(False)
-                if self.measures.returningLed==True:
-                    state='return'
-                self.driveMotors(0.0,0.0)
-            elif state=='return':
-                if self.measures.visitingLed==True:
+                if self.measures.returningLed == True:
+                    state = 'return'
+                self.driveMotors(0.0, 0.0)
+            elif state == 'return':
+                if self.measures.visitingLed == True:
                     self.setVisitingLed(False)
-                if self.measures.returningLed==True:
+                if self.measures.returningLed == True:
                     self.setReturningLed(False)
                 self.wander()
 
-    # Saber a orientação do robô
-    def determine_orientation(self):
-        self.readSensors()
-        compass_dir = self.measures.compass
-        dir = [False, False, False, False]
-
-        if abs(compass_dir) <= 45:
-            dir[0] = True
-        elif compass_dir > 45 and compass_dir <= 135:
-            dir[1] = True
-        elif abs(compass_dir) >= 135:
-            dir[2] = True
-        elif compass_dir <= -45 and compass_dir >= -135:
-            dir[3] = True
-        return dir
-
-    # Mapear as células laterais ao robô
-    def mapSurroundings(self, dir, y, x):
-        center_id = 0
-        left_id = 1
-        right_id = 2
-        dist_tolerance = 1.15
-
-        self.readSensors()
-        center_sensor = self.measures.irSensor[center_id]
-        left_sensor = self.measures.irSensor[left_id]
-        right_sensor = self.measures.irSensor[right_id]
-
-        # Atualiza o mapa com as paredes detectadas
-        def update_map(sensor_value, threshold, coords, wall_value, empty_value, explore_value):
-            if sensor_value >= threshold:
-                GRID_MAP[coords[0]][coords[1]] = wall_value
-            else:
-                GRID_MAP[coords[0]][coords[1]] = empty_value
-                if GRID_MAP[coords[2]][coords[3]] != 80:
-                    GRID_MAP[coords[2]][coords[3]] = explore_value
-
-        if dir[0]:  # Virado para a direita
-            update_map(center_sensor, dist_tolerance, (y, x + 1, y, x + 2), 30, 20, 60)
-            update_map(left_sensor, dist_tolerance, (y - 1, x, y - 2, x), 40, 20, 60)
-            update_map(right_sensor, dist_tolerance, (y + 1, x, y + 2, x), 40, 20, 60)
-            return GRID_MAP[y][x + 1], GRID_MAP[y][x + 2], GRID_MAP[y + 1][x], GRID_MAP[y + 2][x], GRID_MAP[y - 1][x], GRID_MAP[y - 2][x]
-
-        elif dir[1]:  # Virado para cima
-            update_map(center_sensor, dist_tolerance, (y - 1, x, y - 2, x), 40, 20, 60)
-            update_map(left_sensor, dist_tolerance, (y, x - 1, y, x - 2), 30, 20, 60)
-            update_map(right_sensor, dist_tolerance, (y, x + 1, y, x + 2), 30, 20, 60)
-            return GRID_MAP[y - 1][x], GRID_MAP[y - 2][x], GRID_MAP[y][x + 1], GRID_MAP[y][x + 2], GRID_MAP[y][x - 1], GRID_MAP[y][x - 2]
-
-        elif dir[2]:  # Virado para a esquerda
-            update_map(center_sensor, dist_tolerance, (y, x - 1, y, x - 2), 30, 20, 60)
-            update_map(left_sensor, dist_tolerance, (y + 1, x, y + 2, x), 40, 20, 60)
-            update_map(right_sensor, dist_tolerance, (y - 1, x, y - 2, x), 40, 20, 60)
-            return GRID_MAP[y][x - 1], GRID_MAP[y][x - 2], GRID_MAP[y - 1][x], GRID_MAP[y - 2][x], GRID_MAP[y + 1][x], GRID_MAP[y + 2][x]
-
-        elif dir[3]:  # Virado para baixo
-            update_map(center_sensor, dist_tolerance, (y + 1, x, y + 2, x), 40, 20, 60)
-            update_map(left_sensor, dist_tolerance, (y, x + 1, y, x + 2), 30, 20, 60)
-            update_map(right_sensor, dist_tolerance, (y, x - 1, y, x - 2), 30, 20, 60)
-            return GRID_MAP[y + 1][x], GRID_MAP[y + 2][x], GRID_MAP[y][x - 1], GRID_MAP[y][x - 2], GRID_MAP[y][x + 1], GRID_MAP[y + 2][x]
-
-    # Mover o robô para a próxima célula
-    def move(self, direction):
-        # Lógica para mover o robô e atualizar a posição
-        if direction == 'FORWARD':
-            if self.orientation == 'RIGHT':
-                self.current_x += 1
-            elif self.orientation == 'LEFT':
-                self.current_x -= 1
-            elif self.orientation == 'UP':
-                self.current_y += 1
-            elif self.orientation == 'DOWN':
-                self.current_y -= 1
-
-        elif direction == 'TURN_LEFT':
-            self.turn_left()
-
-        elif direction == 'TURN_RIGHT':
-            self.turn_right()
-
-        # Atualize o mapa após cada movimento
-        self.update_map(self.current_x, self.current_y)
-    
-    # Encontrar o caminho mais curto para a próxima célula (Algoritmo de busca em largura - BFS)
-    def find_path(self, map_array, unvisited_x, unvisited_y, current_x, current_y):
-        try:
-            unvisited_positions = list(zip(unvisited_y, unvisited_x))
-            unvisited_positions.sort(key=lambda pos: abs(pos[0] - current_y) + abs(pos[1] - current_x))  # Ordena pela proximidade
-            linear_moves = []
-            all_moves = []
-
-            for target_y, target_x in unvisited_positions:
-                path_array = np.zeros_like(map_array)
-                path_array[current_y, current_x] = 1
-
-                while path_array[target_y, target_x] == 0:
-                    max_value = np.amax(path_array)
-                    possible_moves = np.argwhere(path_array == max_value)
-
-                    for j, i in possible_moves:
-                        if map_array[j, i] in [20, 80, 90]:
-                            for dj, di in [(1, 0), (-1, 0), (0, 1), (0, -1)]:
-                                if path_array[j + dj, i + di] == 0 and map_array[j + dj, i + di] in [20, 60, 80]:
-                                    path_array[j + dj, i + di] = max_value + 1
-
-                moves = []
-                max_value = np.amax(path_array)
-                current_y, current_x = target_y, target_x
-
-                for _ in range(max_value - 1):
-                    surrounding = np.array([[0, path_array[current_y - 1, current_x], 0],
-                                            [path_array[current_y, current_x - 1], path_array[current_y, current_x], path_array[current_y, current_x + 1]],
-                                            [0, path_array[current_y + 1, current_x], 0]])
-                    y, x = np.where(surrounding == max_value - 1)
-                    if len(y) == 0 or len(x) == 0:
-                        break
-                    yi = (y[0], x[0])
-                    if yi == (0, 1):
-                        moves.append('DOWN')
-                        current_y -= 1
-                    elif yi == (1, 0):
-                        moves.append('RIGHT')
-                        current_x -= 1
-                    elif yi == (1, 2):
-                        moves.append('LEFT')
-                        current_x += 1
-                    elif yi == (2, 1):
-                        moves.append('UP')
-                        current_y += 1
-
-                    max_value -= 1
-
-                moves = moves[1::2][::-1]
-                all_moves.append(moves)
-                num_rotations = sum(1 for i in range(1, len(moves)) if moves[i] != moves[i - 1])
-                total_moves = num_rotations + len(moves)
-                linear_moves.append(total_moves)
-
-            return all_moves[linear_moves.index(min(linear_moves))]
-        except:
-            print("Maze Completed. Exiting.")
-            quit()
-
-    # Direcionar o robô para a próxima célula
-    def navigate_path(self, next_moves):
-        def adjust_orientation(dir, direction_index):
-            while not dir[direction_index]:
-                self.rotate_90("left")
-                dir = self.determine_orientation()
-            return dir
-
-        def move_and_update_quadrant(dir):
-            self.move(dir)
-            return self.determine_orientation()
-
-        def get_rotation_action(prev_direction, next_direction):
-            rotation_map = {
-                ('LEFT', 'DOWN'): lambda: self.rotate_90("left"),
-                ('LEFT', 'UP'): lambda: self.rotate_90("right"),
-                ('RIGHT', 'DOWN'): lambda: self.rotate_90("right"),
-                ('RIGHT', 'UP'): lambda: self.rotate_90("left"),
-                ('UP', 'LEFT'): lambda: self.rotate_90("left"),
-                ('UP', 'RIGHT'): lambda: self.rotate_90("right"),
-                ('DOWN', 'LEFT'): lambda: self.rotate_90("right"),
-                ('DOWN', 'RIGHT'): lambda: self.rotate_90("left")
-            }
-            return rotation_map.get((prev_direction, next_direction))
-
-        dir = self.determine_orientation()
-        direction_map = {
-            'LEFT': 2,
-            'RIGHT': 0,
-            'UP': 1,
-            'DOWN': 3
-        }
-
-        if next_moves[0] in direction_map:
-            dir = adjust_orientation(dir, direction_map[next_moves[0]])
-
-        dir = move_and_update_quadrant(dir)
-
-        for i in range(1, len(next_moves)):
-            if next_moves[i] == next_moves[i - 1]:
-                dir = move_and_update_quadrant(dir)
-            else:
-                rotation_function = get_rotation_action(next_moves[i - 1], next_moves[i])
-                if rotation_function:
-                    rotation_function()
-                    dir = self.determine_orientation()
-                    dir = move_and_update_quadrant(dir)
-
-    # Salvar o mapa em um arquivo de texto
-    def save_map(self, GRID_MAP, start_x, start_y):
-        def map_symbol(cell):
-            symbol_map = {
-                80: 'X',
-                90: 'X',
-                20: 'X',
-                60: 'X',
-                30: '|',
-                40: '-',
-                10: ' ',
-                50: 'I'
-            }
-            return symbol_map.get(cell, ' ')
-
-        # Define a posição inicial
-        GRID_MAP[start_y][start_x] = 50
-
-        MAP_str = "\n".join("".join(map_symbol(cell) for cell in row) for row in GRID_MAP)
-
-        with open('mymap.txt', 'w') as f:
-            f.write(MAP_str)
-
-    # Função principal para explorar o labirinto
     def wander(self):
-        global gps_start_x, gps_start_y, map_gps_x, map_gps_y, GRID_MAP
-        global map_current_y, current_MAP_y, initial_map_x, initial_map_y
+        """
+        The main function of the program. Call every other function and chooses between them.
+        :return:
+        """
+        # TODO Remove this on delivery
+        # Remove absolute gps coordinates
+        self.measures.x = self.pose[-1][0]
+        self.measures.y = self.pose[-1][1]
+        # self.gpsConverter()
+        # self.real_x = self.measures.x
+        # self.real_y = self.measures.y
+        # self.measures.x = self.pose[-1][0]
+        # self.measures.y = self.pose[-1][1]
+        # threshold_warn = 0.5
+        # threshold_error = 1
+        # threshold_critical = 2
+        # difference_x = round(self.measures.x - self.real_x, 3)
+        # difference_y = round(self.measures.y - self.real_y, 3)
+        # difference_distance = round(math.sqrt(difference_y ** 2 + difference_x ** 2), 3)
+        center_sensor = self.measures.irSensor[0]
+        left_sensor = self.measures.irSensor[1]
+        right_sensor = self.measures.irSensor[2]
+        back_sensor = self.measures.irSensor[3]
+        # if not self.onRot:
+        #     logging.debug(f'The real GPS values are (X,Y): ({round(self.real_x, 3)},{round(self.real_y, 3)})')
+        #     logging.debug(f'The calculates GPS values are: ({round(self.measures.x, 3)},{round(self.measures.y, 3)})')
+        #     logging.debug(f'The difference between values is ({difference_x},{difference_y})')
+        #     logging.debug(f'The values of the sensors are (f, l, r, b): {center_sensor, left_sensor, right_sensor, back_sensor}')
+        #     if difference_distance >= threshold_critical:
+        #         logging.critical(f'Gigantic error experienced, larger than {threshold_critical}')
+        #     elif difference_distance >= threshold_error:
+        #         logging.error(f'Enormous error experienced, larger than {threshold_error}')
+        #     elif difference_distance >= threshold_warn:
+        #         logging.warning(f'A lot of error experienced, larger than {threshold_warn}')
 
-        self.readSensors()
+        # Check if the compass is facing south
+        self.checkChangeCompass()
 
-        compass = self.measures.compass
-        gps_x = self.measures.x - gps_start_x
-        gps_y = self.measures.y - gps_start_y
+        # If it is facing south, offset the compass
+        if self.South and self.measures.compass < -90:
+            self.measures.compass += 360
+        # If it has travelled a distance of 2
+        if self.endCycle:
+            if not self.onRot:
+                self.converter(0, 0)
+                self.left_detected = left_sensor >= 1.5
+                self.right_detected = right_sensor >= 1.5
+                # if (self.distance(left_sensor) + self.distance(right_sensor) >= 2) and (left_sensor <= 0.6 or right_sensor <= 0.6):
+                #     self.side_correction = False
+                # else:
+                #     self.side_correction = True
+                logging.info(f'Cycle ended on {round(self.measures.x), round(self.measures.y)}')
+                logging.info(f'Wall on Left: {self.left_detected}, Wall on Right: {self.right_detected}')
+            # If you are rotating
+            if self.onRot:
+                self.left_detected = False
+                self.right_detected = False
+                logging.debug(f'Rotating to {self.objective}')
+                # Start rotating to the predefined. Once it is done, this function returns false
+                self.onRot = self.rotate(0.5, 0, 0, self.objective, False)
 
-        map_gps_x = self.get_current_position(gps_x, -26, 28, 2)
-        map_gps_y = self.get_current_position(gps_y, -12, 14, 2)
+            # If it is following a path and needs to locate the next position
+            elif self.searching:
+                logging.info('Following path... ')
+                # Find the current location of the robot
+                loc = self.round_even(self.measures.x), self.round_even(self.measures.y)
 
-        initial_map_x, initial_map_y = 27, 13
-        map_current_y = initial_map_x + map_gps_x
-        current_MAP_y = initial_map_y - map_gps_y
+                # If you are on the first member of path, remove it
+                if loc == self.path[0]:
+                    self.path = self.path[1:]
+                # If the path has ended, reset the variables
+                if len(self.path) == 0:
+                    self.haspath = False
+                    self.searching = False
+                else:
+                    # Calculate the difference between the current location and the next position of the path
+                    x, y = (self.path[0][0] - loc[0]), (self.path[0][1] - loc[1])
 
-        map_current_y = map_current_y if map_current_y else initial_map_x
-        current_MAP_y = current_MAP_y if current_MAP_y else initial_map_y
+                    # Get the current corrected compass orientation
+                    current = self.corrCompass()
 
-        dir = self.determine_orientation()
+                    # With the difference between coordinates, it can determine where it should be oriented to
+                    if x < 0:
+                        self.objective = 180
+                    elif x > 0:
+                        self.objective = 0
+                    elif y < 0:
+                        self.objective = -90
+                    elif y > 0:
+                        self.objective = 90
+                    else:
+                        # If the differences are (0,0), the next position in path is the current one,
+                        # so does not rotate.
+                        self.onRot = False
+                    logging.info(f'To go from {loc} to {self.path[0]}, it needs to go in {self.objective}')
+                    if self.objective != current:
+                        # If the the objective orientation is different then the current one, rotate to it
+                        self.onRot = True
+                    else:
+                        # If not, do not rotate, reset the searching variable (so it can move in front) and remove the
+                        # next path coordinate
+                        self.onRot = False
+                        self.searching = False
+                        # self.path = self.path[1:]
 
-        GRID_MAP[initial_map_y][initial_map_x] = 80
-        front, front_next, right, right_next, left, left_next = self.mapSurroundings(dir, current_MAP_y, map_current_y)
-        
-        GRID_MAP[current_MAP_y][map_current_y] = 90
-        MAP_array = np.array(GRID_MAP)
-        unvisited_y, unvisited_x = np.where(MAP_array == 60)
-        current_y, current_x = np.where(MAP_array == 90)
+            # If it is not following a path and there is an obstacle close to the front of the agent
+            elif (center_sensor + back_sensor)/2 >= 1.0 and not self.pathfollowing:
+                # Search its surroundings for an available path and rotates to it
+                logging.info('Cannot walk in front, checking sides...')
+                self.searchUnknown()
+                self.whosFree()
+                self.onRot = True
+                self.first = False
+            elif self.first:
+                if self.corrCompass() == 0:
+                    self.onRot = True
+                    self.objective = 180
+                    self.searchUnknown()
+                elif self.corrCompass() == 180:
+                    self.onRot = True
+                    self.objective = 0
+                    self.searchUnknown()
+                    self.first = 0
+            else:
+                if not self.onRot:
+                    logging.debug(f'Ended cycle on ({self.measures.x},{self.measures.y})')
+                # If it doesn't have anything in front, nor is in middle of a rotation, nor is it searching for a next
+                # position, add the walked, known and unknown coordinates
+                self.appendWalked()
+                self.amknown = self.searchKnown()
+                self.searchUnknown()
+                logging.debug(f'I have these coordinates as known: {self.known}')
+                logging.debug(f'I have these coordinates as unknown: {self.unknown}')
 
-        GRID_MAP[current_MAP_y][map_current_y] = 80
-        
-        if self.should_turn(right_next, right, front_next, "right"):
-            self.rotate_90("right")
-        elif self.should_turn(left_next, left, front_next, "left"):
-            self.rotate_90("left")
-        elif front == 20 and front_next != 80:
-            self.move(dir)
+                # If it was facing South, reset the variable (it will be checked later)
+                if self.South:
+                    self.South = False
+
+                # If it is on an already known coordinate
+                if self.amknown:
+                    logging.info('I am on a known cell')
+                    # Starts the searching variable
+                    self.searching = True
+
+                    # If it does not have a path
+                    if not self.haspath:
+                        # Get the current coordinates
+                        start = self.round_even(self.measures.x), self.round_even(self.measures.y)
+                        #if self.go0 :
+                        #    self.path, timeout = astar(self.maze.matrix, start, (0,0), time(), 0.5)
+                        #    print(self.path)
+                        # Define the list of possible ends
+                        end_list = self.unknown
+
+                        # From the list of possible ends and the current coordinates, search the smallest path
+                        logging.debug(f'Caculating paths from {start} to the list {end_list}')
+                        end = self.a(start, end_list)
+                        if not end and self.go0:
+                            logging.info('Going to zero to end the challenge')
+                            neighbours = [(-1, 0), (0, -1), (1, 0), (0, 1)]
+                            min_end = None
+                            min_path = None
+                            for neighbour in neighbours:
+                                if neighbour in self.known:
+                                    end = self.a(start, [neighbour])
+                                    path = self.path
+                                    if min_path:
+                                        if len(path) < len(min_path):
+                                            min_end = end
+                                            min_path = path
+                                    else:
+                                        min_end = end
+                                        min_path = path
+                            end = min_end
+                            self.path = min_path
+                            logging.debug(f'This is the end and path: {end, self.path}')
+
+                        # Remove the odd cells from the path, add the end and removing the start
+                        logging.info(f'I calculated a path which is: {self.path}')
+                        logging.debug(f'The end is {end}')
+                        self.path = [items for items in self.path if items[0] % 2 == 0 and items[1] % 2 == 0]
+                        self.path.append((2 * end[0] - self.path[-1][0], 2 * end[1] - self.path[-1][1]))
+                        self.path.remove(start)
+
+                        # Start the variables
+                        self.pathfollowing = True
+                        self.haspath = True
+                    else:
+                        # If it has a path already, walk in front
+                        self.endCycle = False
+                        logging.info(f'I already have a path, which is {self.path}')
+
+                # If it has not following paths, move in front
+                if not self.pathfollowing:
+                    self.endCycle = False
+                    logging.info(f'I am not following paths')
+
         else:
-            if not unvisited_y.size or not unvisited_x.size:
-                print("No more cells to explore. Exiting.")
-                self.save_map(GRID_MAP, initial_map_x, initial_map_y)
-                quit()
-        
-            list_movements = self.find_path(MAP_array, unvisited_x, unvisited_y, current_x, current_y)
-            self.navigate_path(list_movements)
-        
-        self.driveMotors(0, 0)
-        self.save_map(GRID_MAP, initial_map_x, initial_map_y)
+        # If it is not in the end of a cycle, move in front
+            self.endCycle = self.moveFront(0.1, 0.01, 0.00005)
+            logging.debug(f'I am moving in front and facing {self.measures.compass} ({self.corrCompass()}, with the '
+                          f'objective {self.obj})')
 
-    # Verificar se o robô deve virar à esquerda ou à direita
-    def should_turn(self, direction_next, direction_current, front_next, turn_direction):
-        if turn_direction == "right":
-            return direction_next == 60 and direction_current == 20 and front_next != 60
-        elif turn_direction == "left":
-            return direction_next == 60 and direction_current == 20 and front_next != 60
+    def a(self, start, goal_list):
+        """
+                The start of an a start algorithm, performing the needed operations before the algorithm is started
+                :param start: Coordinate
+                :param goal_list: List of coordinates
+                :return:
+                """
+
+        # Defining variables
+        min_len = inf
+        min_idx = -1
+        min_path = []
+
+        # For all the possible goals
+        for idx, goal in enumerate(goal_list):
+            # Defining the possible neighbours, so it can land on an even space
+            neighbours = [(0, 1), (0, -1), (1, 0), (-1, 0)]
+
+            # For every neighbours
+            for i, j in neighbours:
+                # Calculating the neighbour coordinates
+                neigh = goal[0] + i, goal[1] + j
+                logging.debug(f'A* Checking connection between {goal} and {neigh}')
+                # If the neighbour is free and even
+                if (self.maze.matrix[13 - neigh[1]][neigh[0] + 27] == 'X' or self.maze.matrix[13 - neigh[1]][neigh[0] + 27] == 'I') and neigh[0] % 2 == 0 and neigh[1] % 2 == 0:
+                    # Calculate the path
+                    final_goal = neigh
+                    if start and final_goal:
+                        try:
+                            self.path, timeout = astar(self.maze.matrix, start, final_goal, time(), 0.5)
+                        except:
+                            try:
+                                self.path, timeout = astar(self.maze.matrix, final_goal, start, time(), 0.5)
+                                if self.path:
+                                    self.path.reverse()
+                            except:
+                                continue
+                        logging.debug(f'Calculated a path between {start} and {final_goal}, and it was: {self.path}')
+
+                    else:
+                        continue
+
+                    # If the length of the current path is smaller then the current minimum, it becomes the minimum
+                    length = len(self.path)
+                    if length < min_len:
+                        min_idx = idx
+                        min_len = length
+                        min_path = self.path
+                else:
+                    logging.debug('Connection is impossible')
+        # The path is equal to the minimum path
+        self.path = min_path
+
+        # If the goal list isn't empty
+        if goal_list:
+            # Returns the end of the path
+            end = goal_list[min_idx]
+            return end
+        else:
+            # After mapping the whole map, calculate the paths between beacons and prints the path
+            #print('FULL MAPPING DONE ')
+            if self.go0:
+                self.finish()
+                sys.exit()
+            I = (0,0)
+            self.beacon_coordinates.remove(I)
+            perms = list(itertools.permutations(self.beacon_coordinates))
+            path = []
+            k = []
+            for i in range(0, len(perms)):
+                k.append(list(perms[i]))
+            for e in k:
+                e.insert(0, I)
+                e.append(I)
+
+            perms = k
+
+            for perm in perms:
+                for i in range(0, len(perm) - 1):
+                    try:
+                        p, timeout = astar(self.maze.matrix, perm[i], perm[i + 1], time(), 2)
+                    except:
+                        p, timeout = astar(self.maze.matrix, perm[i + 1], perm[i], time(), 2)
+                        p.reverse()
+                    path.extend(p)
+                    path.pop()
+                if len(self.final_path) == 0:
+                    self.final_path = path
+                elif len(path) <= len(self.final_path):
+                    self.final_path = path
+                path = []
+            self.final_path.append((0,0))
+            self.final_path = [i for i in self.final_path if i[0] % 2 == 0 and i[1] % 2 == 0]
+            logging.info(f'The final path is: {self.final_path}')
+            self.writePath()
+            self.maze.matrix[13][27] = '0'
+            if self.beacon_coordinates :
+                for e in self.beacon_coordinates:
+                    y = 13 - e[1]
+                    x = 27 + e[0]
+                    self.maze.matrix[y][x] = str(self.beacon_nums[0])
+                    self.beacon_nums = self.beacon_nums[1:]
+            self.writeMap()
+            self.go0 = True
+
+    def writeMap(self):
+        """
+        Converts the map matrix to a .map file
+        :return:
+        """
+        # Opens the file
+        f = open(self.f + '.map', 'w+')
+
+        # For every element in the matrix, writes it in the file
+        for line in self.maze.matrix:
+            for element in line:
+                f.write(element)
+            f.write('\n')
+        f.close()
+
+    def writePath(self):
+        """
+        Writes the path from a list to a .out file
+        :return:
+        """
+        # Defines variable and opens the file
+        i = 0
+        f = open(self.f + '.path', 'w+')
+        # For every tuple in the list, writes it to the file
+        for x, y in self.final_path:
+            f.write(str(x) + ' ' + str(y) + ' ')
+
+            # If the tuple is a beacon, annotate it
+            if (x, y) in self.beacon_coordinates and (x, y) != (0, 0):
+                f.write('#' + str(i))
+                i += 1
+            f.write('\n')
+        f.close()
+
+    def moveFront(self, Kp, Kd, Ki):
+        """
+                PID for moving in front
+                :param Kp:
+                :param Kd:
+                :param Ki:
+                :return:
+                """
+
+        # Choosing between compass orientations, defining the objectives and other variables
+        current = self.corrCompass()
+        if current == 0:
+            if self.counter == 0:
+                xin = self.round_even(self.measures.x)
+                self.obj = xin + 2
+                self.lin = 0.14
+                self.integral = 0
+                self.minus = False
+            err = self.obj - self.measures.x
+        elif current == 90:
+            if self.counter == 0:
+                yin = self.round_even(self.measures.y)
+                self.obj = yin + 2
+                self.lin = 0.14
+                self.integral = 0
+                self.minus = False
+            err = self.obj - self.measures.y
+        elif current == 180:
+            if self.counter == 0:
+                xin = self.round_even(self.measures.x)
+                self.obj = xin - 2
+                self.lin = 0.14
+                self.integral = 0
+                self.minus = True
+            err = -self.obj + self.measures.x
+        elif current == -90:
+            if self.counter == 0:
+                yin = self.round_even(self.measures.y)
+                self.obj = yin - 2
+                self.lin = 0.14
+                self.integral = 0
+                self.minus = True
+            err = -self.obj + self.measures.y
+        else:
+            err = 0
+
+        # Calculates the velocity based on the PID
+        if self.lin != 0:
+            diff = err / self.lin
+        else:
+            diff = 100
+        self.integral += err
+        self.lin = Kp * err + Kd * diff + Ki * self.integral
+        self.length = err
+
+        # PID controller to keep the robot moving in a straight line
+        objective = current
+        self.rotate(1, 0, 0, objective, True)
+
+        # Limiting the velocities
+        if self.lin > 0.14:
+            self.lin = 0.14
+        if self.rot > 0.15:
+            self.rot = 0.15
+
+        # Sending the velocities
+        self.converter(self.lin, self.rot)
+        self.counter += 1
+
+        # If the length to be walked is under a certain threshold
+        if -0.11 < self.length < 0.11:
+
+            # Check if it is in a beacon, and if so, annotates it
+            if self.measures.ground != -1 :
+                if (self.round_even(self.measures.x), self.round_even(self.measures.y)) not in self.beacon_coordinates:
+                    self.beacon_coordinates.append((self.round_even(self.measures.x), self.round_even(self.measures.y)))
+                    self.beacon_nums.append(self.measures.ground)
+            # Defines a new objective
+            # if self.minus:
+            #     self.obj -= 2
+            # else:
+            #     self.obj += 2
+            self.counter = 0
+
+            # Placing the current and previous location on the map matrix. Calls the wall function to map the walls.
+            if current == 0:
+                x = self.round_even(self.measures.x)
+                self.walls(0, self.last_x + 2, self.last_y)
+                self.maze.matrix[self.last_y][self.last_x + 1] = 'X'
+                self.maze.matrix[self.last_y][self.last_x + 2] = 'X'
+                self.last_x = x + 27
+            elif current == 90:
+                y = self.round_even(self.measures.y)
+                self.walls(90, self.last_x, self.last_y - 2)
+                self.maze.matrix[self.last_y - 1][self.last_x] = 'X'
+                self.maze.matrix[self.last_y - 2][self.last_x] = 'X'
+                self.last_y = -y + 13
+            elif current == 180:
+                x = self.round_even(self.measures.x)
+                self.walls(180, self.last_x - 2, self.last_y)
+                self.maze.matrix[self.last_y][self.last_x - 1] = 'X'
+                self.maze.matrix[self.last_y][self.last_x - 2] = 'X'
+                self.last_x = x + 27
+            elif current == -90:
+                y = self.round_even(self.measures.y)
+                self.walls(-90, self.last_x, self.last_y + 2)
+                self.maze.matrix[self.last_y + 1][self.last_x] = 'X'
+                self.maze.matrix[self.last_y + 2][self.last_x] = 'X'
+                self.last_y = -y + 13
+
+
+            # If the movement is over, return true. If not, return false
+            return True
         return False
 
-    # Rotação de 90 graus
-    def rotate_90(self, direction):
-        if direction == "left":
-            self.driveMotors(-0.1, 0.1)
-        elif direction == "right":
-            self.driveMotors(0.1, -0.1)
+    def walls(self, compass, x, y):
+        """
+                From the GPS location, the compass orientation and the values of the proximity sensore, determine where are
+                walls and maps them.
+                :param compass:
+                :param x:
+                :param y:
+                :return:
+                """
+        str = None
+        value_to_detect = 1.2
 
-    # Ajustar o ângulo da bússola para o múltiplo de 90 mais próximo
-    def adjust_to_nearest_90(self, compass_angle):
-        compass_options = [0, 90, -180, -90, 180]
-        closest_angle = compass_options[find_next_cell(compass_options, compass_angle)]
-        return -180 if closest_angle == 180 else closest_angle
+        if compass == 0:
+            if self.measures.irSensor[0] >= value_to_detect and self.measures.irSensor[1] >= value_to_detect and self.measures.irSensor[
+                2] >= value_to_detect:
+                str = 'deadend 13'
+                self.maze.matrix[y + 1][x] = '-'
+                self.maze.matrix[y - 1][x] = '-'
+                self.maze.matrix[y][x + 1] = '|'
+            elif self.measures.irSensor[1] >= value_to_detect and self.measures.irSensor[0] >= value_to_detect:
+                str = 'corner 6'
+                self.maze.matrix[y - 1][x] = '-'
+                self.maze.matrix[y][x + 1] = '|'
+            elif self.measures.irSensor[2] >= value_to_detect and self.measures.irSensor[0] >= value_to_detect:
+                str = 'corner 8'
+                self.maze.matrix[y + 1][x] = '-'
+                self.maze.matrix[y][x + 1] = '|'
+            elif self.measures.irSensor[1] >= value_to_detect and self.measures.irSensor[2] >= value_to_detect:
+                str = 'both walls'
+                self.maze.matrix[y - 1][x] = '-'
+                self.maze.matrix[y + 1][x] = '-'
+            elif self.measures.irSensor[2] >= value_to_detect:
+                str = 'right wall'
+                self.maze.matrix[y + 1][x] = '-'
+            elif self.measures.irSensor[1] >= value_to_detect:
+                str = 'left wall'
+                self.maze.matrix[y - 1][x] = '-'
+            elif self.measures.irSensor[0] >= value_to_detect:
+                str = 'wall in front'
+                self.maze.matrix[y][x + 1] = '|'
 
-    # Calcular a diferença de rotação entre o ângulo atual e o alvo
-    def calculate_rotation_difference(self, current, target):
-        rotation_error = target - current
-        if rotation_error > 180:
-            rotation_error -= 360
-        elif rotation_error < -180:
-            rotation_error += 360
-        return rotation_error
+        elif compass == 90:
+            if self.measures.irSensor[0] >= value_to_detect and self.measures.irSensor[1] >= value_to_detect and self.measures.irSensor[
+                2] >= value_to_detect:
+                str = 'deadend 14'
+                self.maze.matrix[y][x + 1] = '|'
+                self.maze.matrix[y + 1][x] = '-'
+                self.maze.matrix[y][x - 1] = '|'
+            elif self.measures.irSensor[1] >= value_to_detect and self.measures.irSensor[0] >= value_to_detect:
+                str = 'corner 5'
+                self.maze.matrix[y][x - 1] = '|'
+                self.maze.matrix[y - 1][x] = '-'
+            elif self.measures.irSensor[2] >= value_to_detect and self.measures.irSensor[0] >= value_to_detect:
+                str = 'corner 6'
+                self.maze.matrix[y - 1][x] = '-'
+                self.maze.matrix[y][x + 1] = '|'
+            elif self.measures.irSensor[2] >= value_to_detect and self.measures.irSensor[1] >= value_to_detect:
+                str = 'both walls'
+                self.maze.matrix[y][x - 1] = '|'
+                self.maze.matrix[y][x + 1] = '|'
+            elif self.measures.irSensor[1] >= value_to_detect:
+                str = 'left wall'
+                self.maze.matrix[y][x - 1] = '|'
+            elif self.measures.irSensor[2] >= value_to_detect:
+                str = 'right wall'
+                self.maze.matrix[y][x + 1] = '|'
+            elif self.measures.irSensor[0] >= value_to_detect:
+                str = 'wall in front'
+                self.maze.matrix[y - 1][x] = '-'
 
-    # Aplicar a correção de rotação aos motores
-    def apply_rotation_error(self, rotation_error):
-        rotation_correction = 0.004 * rotation_error
-        self.driveMotors(-rotation_correction, rotation_correction)
+        elif compass == 180:
+            if self.measures.irSensor[0] >= value_to_detect and self.measures.irSensor[1] >= value_to_detect and self.measures.irSensor[
+                2] >= value_to_detect:
+                str = 'deadend 15'
+                self.maze.matrix[y + 1][x] = '-'
+                self.maze.matrix[y - 1][x] = '-'
+                self.maze.matrix[y][x - 1] = '|'
+            elif self.measures.irSensor[1] >= value_to_detect and self.measures.irSensor[0] >= value_to_detect:
+                str = 'corner 7'
+                self.maze.matrix[y + 1][x] = '-'
+                self.maze.matrix[y][x - 1] = '|'
+            elif self.measures.irSensor[2] >= value_to_detect and self.measures.irSensor[0] >= value_to_detect:
+                str = 'corner 5'
+                self.maze.matrix[y - 1][x] = '-'
+                self.maze.matrix[y][x - 1] = '|'
+            elif self.measures.irSensor[1] >= value_to_detect and self.measures.irSensor[2] >= value_to_detect:
+                str = 'both walls'
+                self.maze.matrix[y - 1][x] = '-'
+                self.maze.matrix[y + 1][x] = '-'
+            elif self.measures.irSensor[1] >= value_to_detect:
+                str = 'left wall'
+                self.maze.matrix[y + 1][x] = '-'
+            elif self.measures.irSensor[2] >= value_to_detect:
+                str = 'right wall'
+                self.maze.matrix[y - 1][x] = '-'
+            elif self.measures.irSensor[0] >= value_to_detect:
+                str = 'wall in front'
+                self.maze.matrix[y][x - 1] = '|'
 
-    def get_current_position(self, GPS, start, end, step):
-        gps_grid = [i for i in range(start, end, step)]
-        return gps_grid[find_next_cell(gps_grid, GPS)]
+        elif compass == -90:
+            if self.measures.irSensor[0] >= value_to_detect and self.measures.irSensor[1] >= value_to_detect and self.measures.irSensor[
+                2] >= value_to_detect:
+                str = 'deadend 12'
+                self.maze.matrix[y][x + 1] = '|'
+                self.maze.matrix[y - 1][x] = '-'
+                self.maze.matrix[y][x - 1] = '|'
+            elif self.measures.irSensor[1] >= value_to_detect and self.measures.irSensor[0] >= value_to_detect:
+                str = 'corner 8'
+                self.maze.matrix[y][x + 1] = '|'
+                self.maze.matrix[y + 1][x] = '-'
+            elif self.measures.irSensor[2] >= value_to_detect and self.measures.irSensor[0] >= value_to_detect:
+                str = 'corner 7'
+                self.maze.matrix[y][x - 1] = '|'
+                self.maze.matrix[y + 1][x] = '-'
+            elif self.measures.irSensor[2] >= value_to_detect and self.measures.irSensor[1] >= value_to_detect:
+                str = 'both walls'
+                self.maze.matrix[y][x - 1] = '|'
+                self.maze.matrix[y][x + 1] = '|'
+            elif self.measures.irSensor[1] >= value_to_detect:
+                str = 'left wall'
+                self.maze.matrix[y][x + 1] = '|'
+            elif self.measures.irSensor[2] >= value_to_detect:
+                str = 'right wall'
+                self.maze.matrix[y][x - 1] = '|'
+            elif self.measures.irSensor[0] >= value_to_detect:
+                str = 'wall in front'
+                self.maze.matrix[y + 1][x] = '-'
 
-# Encontrar a célula mais próxima
-def find_next_cell(list, N):
-    cells = []
-    for i in list:
-        cells.append(abs(N - i))
-    return cells.index(min(cells))
+        if str:
+            logging.info(f'Mapped as {str}')
+
+
+    def rotate(self, Kp, Kd, Ki, obj, retrot):
+        """
+        PID to rotate
+        :param Kp: Proportional constant for PID
+        :param Kd: Directional constant for PID
+        :param Ki: Integral constant for PID
+        :param obj: Rotation objective
+        :param retrot: If it's rotating fully or only correcting the direction when walking in front
+        :return:
+        """
+
+        # If it's rotating for the first time, define variables
+        if self.counter2 == 0:
+            self.rot = 0.15
+            self.integralrot = 0
+
+        # Calculate the error
+        err = (obj - self.measures.compass) * math.pi / 180
+
+        # Using a PID to define angular velocity
+        if self.rot != 0:
+            diff = err / self.rot
+        else:
+            diff = 100
+        self.integralrot += err
+        self.rot = Kp * err + Kd * diff + Ki * self.integralrot
+        self.lengthrot = err
+
+        # If the rotation is fully, send the values to the converter
+        if not retrot:
+            self.converter(0, self.rot)
+            self.counter = 0
+        self.counter2 += 1
+
+        # If the rotation to rotated is under a certain threshold, stop the rotation, If not, continue
+        if -0.005 < self.lengthrot < 0.005:
+            self.counter2 = 0
+            return False
+        return True
+
+    def corrCompass(self):
+        """
+        Corrects the compass position to the nearest cardinal point
+        :return:
+        """
+
+        current = self.measures.compass
+        if -45 < current < 45:
+            current = 0
+        elif 45 < current < 135:
+            current = 90
+        elif 135 < current or current < -135:
+            current = 180
+        elif -100 < current < -80:
+            current = -90
+
+        return current
+
+    def compare_compass(self):
+        current = self.measures.compass
+        objective = self.corrCompass()
+        difference = abs(objective - current)
+        return difference
+
+    def whosFree(self):
+        """
+        See which direction has a wall
+        """
+
+        current = self.corrCompass()
+
+        if self.measures.irSensor[1] < 1:
+            self.objective = current + 90
+        elif self.measures.irSensor[2] < 1:
+            self.objective = current - 90
+        # elif self.measures.irSensor[3] < 1:
+        #     self.objective = current + 180
+        else:
+            self.objective = current + 180
+            # print('''I'm lost, please help me''')
+
+        if self.objective <= -180:
+            self.objective += 360
+        if self.objective > 180:
+            self.objective -= 360
+        logging.info(f'Found an empty spot at {self.objective}')
+
+    def gpsConverter(self):
+        """
+        Convert gps coordinates from absolute to relative
+        :return:
+        """
+
+        if self.countergps == 0:
+            self.xin = self.measures.x
+            self.yin = self.measures.y
+            self.countergps += 1
+        self.measures.x -= self.xin
+        self.measures.y -= self.yin
+
+    def checkChangeCompass(self):
+        """
+        If the robot is in any way facing south, toggle a variable
+        :return:
+        """
+        if self.objective == 180:
+            logging.debug('Facing South')
+            self.South = True
+        else:
+            self.South = False
+
+    def appendWalked(self):
+        """
+        Append every coordinate walked to a list
+        :return:
+        """
+        # Get GPS values
+        x = self.round_even(self.measures.x)
+        y = self.round_even(self.measures.y)
+        self.walked.append((x, y))
+
+    def searchUnknown(self):
+        """
+        Search in all 4 directions for empty spaces and places them on a list
+        :return:
+        """
+        # Get GPS and compass values
+        x = self.round_even(self.measures.x)
+        y = self.round_even(self.measures.y)
+        current = radians(self.corrCompass())
+        entries = []
+
+        # If a surrounding cell is empty, add it to the list
+        if self.measures.irSensor[0] < 1:
+            entries.append((x + round(cos(current)), y + round(sin(current))))
+        if self.measures.irSensor[1] < 1:
+            entries.append((x + round(cos(current + pi / 2)), y + round(sin(current + pi / 2))))
+        # if self.measures.irSensor[3] < 1:
+        #     entries.append((x + round(cos(current + pi)), y + round(sin(current + pi))))
+        if self.measures.irSensor[2] < 1:
+            entries.append((x + round(cos(current - pi / 2)), y + round(sin(current - pi / 2))))
+
+        # Avoid repetition between lists
+        for entry in entries:
+            if entry not in self.unknown and entry not in self.known:
+                logging.info(f'Added {entry} to unknown list')
+                self.unknown.append(entry)
+
+    def searchKnown(self):
+        """
+        When the robot is in a cell, it's certain that cell is empty. Append it to a list.
+        :return:
+        """
+        # Get GPS values
+        x = self.round_even(self.measures.x)
+        y = self.round_even(self.measures.y)
+        entry = (x, y)
+        last_entry = self.walked[-2]
+        mid_entry = (int((last_entry[0] + entry[0]) / 2), (int((last_entry[1] + entry[1]) / 2)))
+        # If the first wall is covered
+        equal = last_entry == mid_entry
+        if equal:
+            # self.first = False
+            logging.debug('My last coord is the same as the current one.')
+
+        # Append the coordinates if they are not there already, and remove if on unknown
+        if entry in self.unknown:
+            self.unknown.remove(entry)
+            logging.info(f'Removed {entry} of unknown list')
+        # if mid_entry in self.unknown and not self.first and not equal:
+        if mid_entry in self.unknown and not self.first and not equal:
+            self.unknown.remove(mid_entry)
+            logging.info(f'Removed {mid_entry} of unknown list')
+        # if mid_entry not in self.known and not self.first and not equal:
+        if mid_entry not in self.known and not equal:
+            self.known.append(mid_entry)
+            logging.info(f'Added {mid_entry} to known list')
+        # elif mid_entry not in self.known and self.first and not equal:
+        #     self.unknown.append(mid_entry)
+        #     self.first = False
+        #     logging.info(f'Added {mid_entry} to unknown list')
+        if entry not in self.known:
+            self.known.append(entry)
+            logging.info(f'Added {entry} to known list')
+            return False
+        else:
+            return True
+
+    def velEstimator(self, left_motor, right_motor):
+        """
+        Estimates the real velocity from the commands given
+        """
+        left_out = (left_motor + self.estimated_velocity[-1][0]) / 2
+        right_out = (right_motor + self.estimated_velocity[-1][1]) / 2
+        self.estimated_velocity.append((left_out, right_out))
+        self.kinematics()
+
+    def kinematics(self):
+        """
+        From each wheel velocity, calculate the velocity in the global coordinate frame
+        """
+        wheel_velocity = np.transpose(np.asarray(self.estimated_velocity[-1]))
+        velocity_matrix = np.asarray([[1 / 2, 1 / 2], [-1 / 2, 1 / 2]])
+        global_velocity_matrix = np.asarray([[math.cos(math.radians(self.measures.compass)), 0],
+                                             [math.sin(math.radians(self.measures.compass)), 0],
+                                             [0, 1]])
+        velocity = np.matmul(velocity_matrix, wheel_velocity)
+        global_velocity = np.matmul(global_velocity_matrix, velocity)
+        current_velocity = (global_velocity[0], global_velocity[1])
+        last_pose = self.pose[-1]
+        current_pose = (last_pose[0] + current_velocity[0], last_pose[1] + current_velocity[1])
+        corrected_pose = self.corrector(last_pose)
+        if corrected_pose:
+            current_pose = (corrected_pose[0] + current_velocity[0], corrected_pose[1] + current_velocity[1])
+        self.pose.append(current_pose)
+
+    def distance(self, x):
+        return 1 / x
+
+    def corrector(self, last_pose):
+        current_pose = None
+        wall = None
+        direction = ""
+        old_pose = last_pose
+        center = self.measures.irSensor[0]
+        left = self.measures.irSensor[1]
+        right = self.measures.irSensor[2]
+        back = self.measures.irSensor[3]
+        robot_radius = 0.5 #0.5 diameter
+        distance_to_wall = 0.9
+        difference_threshold = 2
+        value_to_front = 1.2
+        value_to_min_side = 0.4
+        value_to_max_side = 2.0
+        distance_threshold = 2.0
+        # logging.debug(f'Left: {self.side_correction}')
+
+        if self.compare_compass() <= difference_threshold:
+            if self.corrCompass() == 0:
+                if center >= value_to_front and back >= value_to_front:
+                    wall = self.round_even(last_pose[0]) + distance_to_wall, last_pose[1]
+                    current_pose = (wall[0] - self.distance((center + back)/2) - robot_radius, last_pose[1])
+                    last_pose = current_pose
+                    direction = 'Front '
+                # elif (self.left_detected and left <= value_to_min_side) or (self.right_detected and right <= value_to_min_side):
+                #     current_pose = (self.round_odd(last_pose[0]) + 0.35, last_pose[1])
+                #     last_pose = current_pose
+                #     self.left_detected = False
+                #     self.right_detected = False
+                #     direction = 'Sides '
+                if left >= value_to_max_side:
+                    wall = last_pose[0], self.round_even(last_pose[1]) + distance_to_wall
+                    current_pose = (last_pose[0], wall[1] - self.distance(left) - robot_radius)
+                    direction = direction + 'Left'
+                elif right >= value_to_max_side:
+                    wall = last_pose[0], self.round_even(last_pose[1]) - distance_to_wall
+                    current_pose = (last_pose[0], wall[1] + self.distance(right) + robot_radius)
+                    direction = direction + 'Right'
+
+            elif self.corrCompass() == 90:
+                if center >= value_to_front and back >= value_to_front:
+                    wall = last_pose[0], self.round_even(last_pose[1]) + distance_to_wall
+                    current_pose = (last_pose[0], wall[1] - self.distance((center + back)/2) - robot_radius)
+                    last_pose = current_pose
+                    direction = 'Front'
+                # elif (self.left_detected and left <= value_to_min_side) or (self.right_detected and right <= value_to_min_side):
+                #     current_pose = (last_pose[0], self.round_odd(last_pose[1]) + 0.35)
+                #     last_pose = current_pose
+                #     self.left_detected = False
+                #     self.right_detected = False
+                #     direction = 'Sides '
+                if left >= value_to_max_side:
+                    wall = self.round_even(last_pose[0]) - distance_to_wall, last_pose[1]
+                    current_pose = (wall[0] + self.distance(left) + robot_radius, last_pose[1])
+                    direction = direction + 'Left'
+                elif right >= value_to_max_side:
+                    wall = self.round_even(last_pose[0]) + distance_to_wall, last_pose[1]
+                    current_pose = (wall[0] - self.distance(right) - robot_radius, last_pose[1])
+                    direction = direction + 'Right'
+
+            elif self.corrCompass() == 180:
+                if center >= value_to_front and back >= value_to_front:
+                    wall = self.round_even(last_pose[0]) - distance_to_wall, last_pose[1]
+                    current_pose = (wall[0] + self.distance((center + back)/2) + robot_radius, last_pose[1])
+                    last_pose = current_pose
+                    direction = 'Front'
+                # elif (self.left_detected and left <= value_to_min_side) or (self.right_detected and right <= value_to_min_side):
+                #     current_pose = (self.round_odd(last_pose[0]) - 0.35, last_pose[1])
+                #     last_pose = current_pose
+                #     self.left_detected = False
+                #     self.right_detected = False
+                #     direction = 'Sides '
+                if left >= value_to_max_side:
+                    wall = last_pose[0], self.round_even(last_pose[1]) - distance_to_wall
+                    current_pose = (last_pose[0], wall[1] + self.distance(left) + robot_radius)
+                    direction = direction + 'Left'
+                elif right >= value_to_max_side:
+                    wall = last_pose[0], self.round_even(last_pose[1]) + distance_to_wall
+                    current_pose = (last_pose[0], wall[1] - self.distance(right) - robot_radius)
+                    direction = direction + 'Right'
+
+            elif self.corrCompass() == -90:
+                if center >= value_to_front and back >= value_to_front:
+                    wall = last_pose[0], self.round_even(last_pose[1]) - distance_to_wall
+                    current_pose = (last_pose[0], wall[1] + self.distance((center + back)/2) + robot_radius)
+                    last_pose = current_pose
+                    direction = 'Front'
+                # elif (self.left_detected and left <= value_to_min_side) or (self.right_detected and right <= value_to_min_side):
+                #     current_pose = (last_pose[0], self.round_odd(last_pose[1]) - 0.35)
+                #     last_pose = current_pose
+                #     self.left_detected = False
+                #     self.right_detected = False
+                #     direction = 'Sides '
+                if left >= value_to_max_side:
+                    wall = self.round_even(last_pose[0]) + distance_to_wall, last_pose[1]
+                    current_pose = (wall[0] - self.distance(left) - robot_radius, last_pose[1])
+                    direction = direction + 'Left'
+                elif right >= value_to_max_side:
+                    wall = self.round_even(last_pose[0]) - distance_to_wall, last_pose[1]
+                    current_pose = (wall[0] + self.distance(right) + robot_radius, last_pose[1])
+                    direction = direction + 'Right'
+
+            if current_pose:
+                current_pose = (round(current_pose[0], 3), round(current_pose[1], 3))
+                old_pose = (round(old_pose[0], 3), round(old_pose[1], 3))
+                logging.debug(f'Wall close to the {direction}, I believe I am at {current_pose} and I believed I was at {old_pose}')
+                if wall:
+                    logging.debug(f'Wall coordinates: {wall}')
+                return current_pose
+
+    def round_even(self, number):
+        return round(number/2)*2
+
+    def round_odd(self, number):
+        difference = number - self.round_even(number)
+        if difference >= 0:
+            return round(number/2)*2 + 1
+        else:
+            return round(number/2)*2 - 1
+
+
+    def converter(self, lin, rot):
+        """
+        Converts the value of linear and angular velocity in motor rotation
+        :param lin: Float32
+        :param rot: Float32
+        :return:
+        """
+        left_motor = lin - rot / 2
+        right_motor = lin + rot / 2
+        if left_motor > 0.15:
+            left_motor = 0.15
+        elif left_motor < -0.15:
+            left_motor = -0.15
+        if right_motor > 0.15:
+            right_motor = 0.15
+        elif right_motor < -0.15:
+            right_motor = -0.15
+        logging.debug(f'The velocity command given to the converter is (lin: {round(lin, 3)}, rot: {round(rot, 3)})')
+        logging.debug(f'The velocity command given to the motors is ({round(left_motor, 3)},{round(right_motor, 3)})')
+        if not self.onRot:
+            self.velEstimator(left_motor, right_motor)
+        self.driveMotors(left_motor, right_motor)
+
+
+class Lab():
+    def __init__(self):
+        self.matrix = [[' '] * 55]
+
+        for m in range(26):
+            self.matrix.insert(0, [' '] * 55)
+        self.matrix[13][27] = 'I'
+
 
 class Map():
     def __init__(self, filename):
         tree = ET.parse(filename)
         root = tree.getroot()
-        
-        self.labMap = [[' '] * (CELLCOLS*2-1) for i in range(CELLROWS*2-1) ]
-        i=1
+
+        self.labMap = [[' '] * (CELLCOLS * 2 - 1) for i in range(CELLROWS * 2 - 1)]
+        i = 1
         for child in root.iter('Row'):
-           line=child.attrib['Pattern']
-           row =int(child.attrib['Pos'])
-           if row % 2 == 0:  # this line defines vertical lines
-               for c in range(len(line)):
-                   if (c+1) % 3 == 0:
-                       if line[c] == '|':
-                           self.labMap[row][(c+1)//3*2-1]='|'
-                       else:
-                           None
-           else:  # this line defines horijontal lines
-               for c in range(len(line)):
-                   if c % 3 == 0:
-                       if line[c] == '-':
-                           self.labMap[row][c//3*2]='-'
-                       else:
-                           None
-               
-           i=i+1
+            line = child.attrib['Pattern']
+            row = int(child.attrib['Pos'])
+            if row % 2 == 0:  # this line defines vertical lines
+                for c in range(len(line)):
+                    if (c + 1) % 3 == 0:
+                        if line[c] == '|':
+                            self.labMap[row][(c + 1) // 3 * 2 - 1] = '|'
+                        else:
+                            None
+            else:  # this line defines horizontal lines
+                for c in range(len(line)):
+                    if c % 3 == 0:
+                        if line[c] == '-':
+                            self.labMap[row][c // 3 * 2] = '-'
+                        else:
+                            None
+
+            i = i + 1
 
 
-rob_name = "pClient1"
+rob_name = "veryimportantrobot"
 host = "localhost"
 pos = 1
 mapc = None
+f = "default"
 
-for i in range(1, len(sys.argv),2):
+for i in range(1, len(sys.argv), 2):
     if (sys.argv[i] == "--host" or sys.argv[i] == "-h") and i != len(sys.argv) - 1:
         host = sys.argv[i + 1]
     elif (sys.argv[i] == "--pos" or sys.argv[i] == "-p") and i != len(sys.argv) - 1:
-        pos = int(sys.argv[i + 1])
+        pos = sys.argv[i + 1]
     elif (sys.argv[i] == "--robname" or sys.argv[i] == "-r") and i != len(sys.argv) - 1:
         rob_name = sys.argv[i + 1]
     elif (sys.argv[i] == "--map" or sys.argv[i] == "-m") and i != len(sys.argv) - 1:
         mapc = Map(sys.argv[i + 1])
+    elif (sys.argv[i] == "--file" or sys.argv[i] == "-f") and i != len(sys.argv) - 1:
+        f = sys.argv[i + 1]
     else:
         print("Unkown argument", sys.argv[i])
         quit()
 
 if __name__ == '__main__':
-    rob=MyRob(rob_name,pos,[0.0,90.0,-90.0,180.0],host)
+    logging.basicConfig(filename='app.log', filemode='w', format='%(name)s - %(levelname)s - %(message)s',
+                        level=logging.DEBUG)
+    # set up logging to console
+    console = logging.StreamHandler()
+    console.setLevel(logging.INFO)
+    # set a format which is simpler for console use
+    formatter = logging.Formatter('%(asctime)s: %(levelname)-8s %(message)s')
+    console.setFormatter(formatter)
+    # add the handler to the root logger
+    logging.getLogger('').addHandler(console)
 
+    logger = logging.getLogger(__name__)
+    rob = MyRob(rob_name, pos, [0.0, 90.0, -90.0, 0.0], host)
+    rob.f = f
     if mapc != None:
         rob.setMap(mapc.labMap)
         rob.printMap()
-    
+
     rob.run()
