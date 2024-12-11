@@ -5,7 +5,6 @@ from croblink import *
 from math import *
 import xml.etree.ElementTree as ET
 from math import inf
-from astar import *
 import logging
 import numpy as np
 import itertools
@@ -107,42 +106,12 @@ class MyRob(CRobLinkAngs):
                 self.wander()
 
     def wander(self):
-        """
-        The main function of the program. Call every other function and chooses between them.
-        :return:
-        """
-        # TODO Remove this on delivery
-        # Remove absolute gps coordinates
         self.measures.x = self.pose[-1][0]
         self.measures.y = self.pose[-1][1]
-        # self.gpsConverter()
-        # self.real_x = self.measures.x
-        # self.real_y = self.measures.y
-        # self.measures.x = self.pose[-1][0]
-        # self.measures.y = self.pose[-1][1]
-        # threshold_warn = 0.5
-        # threshold_error = 1
-        # threshold_critical = 2
-        # difference_x = round(self.measures.x - self.real_x, 3)
-        # difference_y = round(self.measures.y - self.real_y, 3)
-        # difference_distance = round(math.sqrt(difference_y ** 2 + difference_x ** 2), 3)
         center_sensor = self.measures.irSensor[0]
         left_sensor = self.measures.irSensor[1]
         right_sensor = self.measures.irSensor[2]
         back_sensor = self.measures.irSensor[3]
-        # if not self.onRot:
-        #     logging.debug(f'The real GPS values are (X,Y): ({round(self.real_x, 3)},{round(self.real_y, 3)})')
-        #     logging.debug(f'The calculates GPS values are: ({round(self.measures.x, 3)},{round(self.measures.y, 3)})')
-        #     logging.debug(f'The difference between values is ({difference_x},{difference_y})')
-        #     logging.debug(f'The values of the sensors are (f, l, r, b): {center_sensor, left_sensor, right_sensor, back_sensor}')
-        #     if difference_distance >= threshold_critical:
-        #         logging.critical(f'Gigantic error experienced, larger than {threshold_critical}')
-        #     elif difference_distance >= threshold_error:
-        #         logging.error(f'Enormous error experienced, larger than {threshold_error}')
-        #     elif difference_distance >= threshold_warn:
-        #         logging.warning(f'A lot of error experienced, larger than {threshold_warn}')
-
-        # Check if the compass is facing south
         self.checkChangeCompass()
 
         # If it is facing south, offset the compass
@@ -154,10 +123,6 @@ class MyRob(CRobLinkAngs):
                 self.converter(0, 0)
                 self.left_detected = left_sensor >= 1.5
                 self.right_detected = right_sensor >= 1.5
-                # if (self.distance(left_sensor) + self.distance(right_sensor) >= 2) and (left_sensor <= 0.6 or right_sensor <= 0.6):
-                #     self.side_correction = False
-                # else:
-                #     self.side_correction = True
                 logging.info(f'Cycle ended on {round(self.measures.x), round(self.measures.y)}')
                 logging.info(f'Wall on Left: {self.left_detected}, Wall on Right: {self.right_detected}')
             # If you are rotating
@@ -255,10 +220,6 @@ class MyRob(CRobLinkAngs):
                     if not self.haspath:
                         # Get the current coordinates
                         start = self.round_even(self.measures.x), self.round_even(self.measures.y)
-                        #if self.go0 :
-                        #    self.path, timeout = astar(self.maze.matrix, start, (0,0), time(), 0.5)
-                        #    print(self.path)
-                        # Define the list of possible ends
                         end_list = self.unknown
 
                         # From the list of possible ends and the current coordinates, search the smallest path
@@ -311,13 +272,6 @@ class MyRob(CRobLinkAngs):
                           f'objective {self.obj})')
 
     def a(self, start, goal_list):
-        """
-                The start of an a start algorithm, performing the needed operations before the algorithm is started
-                :param start: Coordinate
-                :param goal_list: List of coordinates
-                :return:
-                """
-
         # Defining variables
         min_len = inf
         min_idx = -1
@@ -450,14 +404,6 @@ class MyRob(CRobLinkAngs):
         f.close()
 
     def moveFront(self, Kp, Kd, Ki):
-        """
-                PID for moving in front
-                :param Kp:
-                :param Kd:
-                :param Ki:
-                :return:
-                """
-
         # Choosing between compass orientations, defining the objectives and other variables
         current = self.corrCompass()
         if current == 0:
@@ -526,11 +472,6 @@ class MyRob(CRobLinkAngs):
                 if (self.round_even(self.measures.x), self.round_even(self.measures.y)) not in self.beacon_coordinates:
                     self.beacon_coordinates.append((self.round_even(self.measures.x), self.round_even(self.measures.y)))
                     self.beacon_nums.append(self.measures.ground)
-            # Defines a new objective
-            # if self.minus:
-            #     self.obj -= 2
-            # else:
-            #     self.obj += 2
             self.counter = 0
 
             # Placing the current and previous location on the map matrix. Calls the wall function to map the walls.
@@ -565,14 +506,6 @@ class MyRob(CRobLinkAngs):
         return False
 
     def walls(self, compass, x, y):
-        """
-                From the GPS location, the compass orientation and the values of the proximity sensore, determine where are
-                walls and maps them.
-                :param compass:
-                :param x:
-                :param y:
-                :return:
-                """
         str = None
         value_to_detect = 1.2
 
@@ -697,16 +630,6 @@ class MyRob(CRobLinkAngs):
 
 
     def rotate(self, Kp, Kd, Ki, obj, retrot):
-        """
-        PID to rotate
-        :param Kp: Proportional constant for PID
-        :param Kd: Directional constant for PID
-        :param Ki: Integral constant for PID
-        :param obj: Rotation objective
-        :param retrot: If it's rotating fully or only correcting the direction when walking in front
-        :return:
-        """
-
         # If it's rotating for the first time, define variables
         if self.counter2 == 0:
             self.rot = 0.15
@@ -737,11 +660,6 @@ class MyRob(CRobLinkAngs):
         return True
 
     def corrCompass(self):
-        """
-        Corrects the compass position to the nearest cardinal point
-        :return:
-        """
-
         current = self.measures.compass
         if -45 < current < 45:
             current = 0
@@ -761,10 +679,6 @@ class MyRob(CRobLinkAngs):
         return difference
 
     def whosFree(self):
-        """
-        See which direction has a wall
-        """
-
         current = self.corrCompass()
 
         if self.measures.irSensor[1] < 1:
@@ -784,11 +698,6 @@ class MyRob(CRobLinkAngs):
         logging.info(f'Found an empty spot at {self.objective}')
 
     def gpsConverter(self):
-        """
-        Convert gps coordinates from absolute to relative
-        :return:
-        """
-
         if self.countergps == 0:
             self.xin = self.measures.x
             self.yin = self.measures.y
@@ -797,10 +706,6 @@ class MyRob(CRobLinkAngs):
         self.measures.y -= self.yin
 
     def checkChangeCompass(self):
-        """
-        If the robot is in any way facing south, toggle a variable
-        :return:
-        """
         if self.objective == 180:
             logging.debug('Facing South')
             self.South = True
@@ -808,20 +713,12 @@ class MyRob(CRobLinkAngs):
             self.South = False
 
     def appendWalked(self):
-        """
-        Append every coordinate walked to a list
-        :return:
-        """
         # Get GPS values
         x = self.round_even(self.measures.x)
         y = self.round_even(self.measures.y)
         self.walked.append((x, y))
 
     def searchUnknown(self):
-        """
-        Search in all 4 directions for empty spaces and places them on a list
-        :return:
-        """
         # Get GPS and compass values
         x = self.round_even(self.measures.x)
         y = self.round_even(self.measures.y)
@@ -845,10 +742,6 @@ class MyRob(CRobLinkAngs):
                 self.unknown.append(entry)
 
     def searchKnown(self):
-        """
-        When the robot is in a cell, it's certain that cell is empty. Append it to a list.
-        :return:
-        """
         # Get GPS values
         x = self.round_even(self.measures.x)
         y = self.round_even(self.measures.y)
@@ -873,10 +766,6 @@ class MyRob(CRobLinkAngs):
         if mid_entry not in self.known and not equal:
             self.known.append(mid_entry)
             logging.info(f'Added {mid_entry} to known list')
-        # elif mid_entry not in self.known and self.first and not equal:
-        #     self.unknown.append(mid_entry)
-        #     self.first = False
-        #     logging.info(f'Added {mid_entry} to unknown list')
         if entry not in self.known:
             self.known.append(entry)
             logging.info(f'Added {entry} to known list')
@@ -885,18 +774,12 @@ class MyRob(CRobLinkAngs):
             return True
 
     def velEstimator(self, left_motor, right_motor):
-        """
-        Estimates the real velocity from the commands given
-        """
         left_out = (left_motor + self.estimated_velocity[-1][0]) / 2
         right_out = (right_motor + self.estimated_velocity[-1][1]) / 2
         self.estimated_velocity.append((left_out, right_out))
         self.kinematics()
 
     def kinematics(self):
-        """
-        From each wheel velocity, calculate the velocity in the global coordinate frame
-        """
         wheel_velocity = np.transpose(np.asarray(self.estimated_velocity[-1]))
         velocity_matrix = np.asarray([[1 / 2, 1 / 2], [-1 / 2, 1 / 2]])
         global_velocity_matrix = np.asarray([[math.cos(math.radians(self.measures.compass)), 0],
@@ -940,12 +823,6 @@ class MyRob(CRobLinkAngs):
                     current_pose = (wall[0] - self.distance((center + back)/2) - robot_radius, last_pose[1])
                     last_pose = current_pose
                     direction = 'Front '
-                # elif (self.left_detected and left <= value_to_min_side) or (self.right_detected and right <= value_to_min_side):
-                #     current_pose = (self.round_odd(last_pose[0]) + 0.35, last_pose[1])
-                #     last_pose = current_pose
-                #     self.left_detected = False
-                #     self.right_detected = False
-                #     direction = 'Sides '
                 if left >= value_to_max_side:
                     wall = last_pose[0], self.round_even(last_pose[1]) + distance_to_wall
                     current_pose = (last_pose[0], wall[1] - self.distance(left) - robot_radius)
@@ -961,12 +838,6 @@ class MyRob(CRobLinkAngs):
                     current_pose = (last_pose[0], wall[1] - self.distance((center + back)/2) - robot_radius)
                     last_pose = current_pose
                     direction = 'Front'
-                # elif (self.left_detected and left <= value_to_min_side) or (self.right_detected and right <= value_to_min_side):
-                #     current_pose = (last_pose[0], self.round_odd(last_pose[1]) + 0.35)
-                #     last_pose = current_pose
-                #     self.left_detected = False
-                #     self.right_detected = False
-                #     direction = 'Sides '
                 if left >= value_to_max_side:
                     wall = self.round_even(last_pose[0]) - distance_to_wall, last_pose[1]
                     current_pose = (wall[0] + self.distance(left) + robot_radius, last_pose[1])
@@ -982,12 +853,6 @@ class MyRob(CRobLinkAngs):
                     current_pose = (wall[0] + self.distance((center + back)/2) + robot_radius, last_pose[1])
                     last_pose = current_pose
                     direction = 'Front'
-                # elif (self.left_detected and left <= value_to_min_side) or (self.right_detected and right <= value_to_min_side):
-                #     current_pose = (self.round_odd(last_pose[0]) - 0.35, last_pose[1])
-                #     last_pose = current_pose
-                #     self.left_detected = False
-                #     self.right_detected = False
-                #     direction = 'Sides '
                 if left >= value_to_max_side:
                     wall = last_pose[0], self.round_even(last_pose[1]) - distance_to_wall
                     current_pose = (last_pose[0], wall[1] + self.distance(left) + robot_radius)
@@ -1003,12 +868,6 @@ class MyRob(CRobLinkAngs):
                     current_pose = (last_pose[0], wall[1] + self.distance((center + back)/2) + robot_radius)
                     last_pose = current_pose
                     direction = 'Front'
-                # elif (self.left_detected and left <= value_to_min_side) or (self.right_detected and right <= value_to_min_side):
-                #     current_pose = (last_pose[0], self.round_odd(last_pose[1]) - 0.35)
-                #     last_pose = current_pose
-                #     self.left_detected = False
-                #     self.right_detected = False
-                #     direction = 'Sides '
                 if left >= value_to_max_side:
                     wall = self.round_even(last_pose[0]) + distance_to_wall, last_pose[1]
                     current_pose = (wall[0] - self.distance(left) - robot_radius, last_pose[1])
@@ -1038,12 +897,6 @@ class MyRob(CRobLinkAngs):
 
 
     def converter(self, lin, rot):
-        """
-        Converts the value of linear and angular velocity in motor rotation
-        :param lin: Float32
-        :param rot: Float32
-        :return:
-        """
         left_motor = lin - rot / 2
         right_motor = lin + rot / 2
         if left_motor > 0.15:
@@ -1098,7 +951,7 @@ class Map():
             i = i + 1
 
 
-rob_name = "veryimportantrobot"
+rob_name = "pClient1"
 host = "localhost"
 pos = 1
 mapc = None
