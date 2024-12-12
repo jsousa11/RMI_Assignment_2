@@ -369,25 +369,25 @@ class MyRob(CRobLinkAngs):
 
             if current == 0:
                 x = self.round_even(self.measures.x)
-                self.walls(0, self.last_x + 2, self.last_y)
+                self.detect_walls(0, self.last_x + 2, self.last_y)
                 self.maze.matrix[self.last_y][self.last_x + 1] = 'X'
                 self.maze.matrix[self.last_y][self.last_x + 2] = 'X'
                 self.last_x = x + 27
             elif current == 90:
                 y = self.round_even(self.measures.y)
-                self.walls(90, self.last_x, self.last_y - 2)
+                self.detect_walls(90, self.last_x, self.last_y - 2)
                 self.maze.matrix[self.last_y - 1][self.last_x] = 'X'
                 self.maze.matrix[self.last_y - 2][self.last_x] = 'X'
                 self.last_y = -y + 13
             elif current == 180:
                 x = self.round_even(self.measures.x)
-                self.walls(180, self.last_x - 2, self.last_y)
+                self.detect_walls(180, self.last_x - 2, self.last_y)
                 self.maze.matrix[self.last_y][self.last_x - 1] = 'X'
                 self.maze.matrix[self.last_y][self.last_x - 2] = 'X'
                 self.last_x = x + 27
             elif current == -90:
                 y = self.round_even(self.measures.y)
-                self.walls(-90, self.last_x, self.last_y + 2)
+                self.detect_walls(-90, self.last_x, self.last_y + 2)
                 self.maze.matrix[self.last_y + 1][self.last_x] = 'X'
                 self.maze.matrix[self.last_y + 2][self.last_x] = 'X'
                 self.last_y = -y + 13
@@ -395,125 +395,47 @@ class MyRob(CRobLinkAngs):
             return True
         return False
 
-    def walls(self, compass, x, y):
-        str = None
+    def detect_walls(self, compass, x, y):
         value_to_detect = 1.2
+        ir_sensors = self.measures.irSensor  # Sensores infravermelhos
+        walls = []
 
-        if compass == 0:
-            if self.measures.irSensor[0] >= value_to_detect and self.measures.irSensor[1] >= value_to_detect and self.measures.irSensor[
-                2] >= value_to_detect:
-                str = 'deadend 13'
-                self.maze.matrix[y + 1][x] = '-'
-                self.maze.matrix[y - 1][x] = '-'
-                self.maze.matrix[y][x + 1] = '|'
-            elif self.measures.irSensor[1] >= value_to_detect and self.measures.irSensor[0] >= value_to_detect:
-                str = 'corner 6'
-                self.maze.matrix[y - 1][x] = '-'
-                self.maze.matrix[y][x + 1] = '|'
-            elif self.measures.irSensor[2] >= value_to_detect and self.measures.irSensor[0] >= value_to_detect:
-                str = 'corner 8'
-                self.maze.matrix[y + 1][x] = '-'
-                self.maze.matrix[y][x + 1] = '|'
-            elif self.measures.irSensor[1] >= value_to_detect and self.measures.irSensor[2] >= value_to_detect:
-                str = 'both walls'
-                self.maze.matrix[y - 1][x] = '-'
-                self.maze.matrix[y + 1][x] = '-'
-            elif self.measures.irSensor[2] >= value_to_detect:
-                str = 'right wall'
-                self.maze.matrix[y + 1][x] = '-'
-            elif self.measures.irSensor[1] >= value_to_detect:
-                str = 'left wall'
-                self.maze.matrix[y - 1][x] = '-'
-            elif self.measures.irSensor[0] >= value_to_detect:
-                str = 'wall in front'
-                self.maze.matrix[y][x + 1] = '|'
+        if ir_sensors[0] >= value_to_detect:  # Objeto à frente
+            walls.append("front")
+        if ir_sensors[1] >= value_to_detect:  # Objeto à esquerda
+            walls.append("left")
+        if ir_sensors[2] >= value_to_detect:  # Objeto à direita
+            walls.append("right")
 
-        elif compass == 90:
-            if self.measures.irSensor[0] >= value_to_detect and self.measures.irSensor[1] >= value_to_detect and self.measures.irSensor[
-                2] >= value_to_detect:
-                str = 'deadend 14'
+        # Atualizar a matriz do labirinto com base na orientação e paredes detectadas
+        if compass == 0:  # Norte
+            if "front" in walls:
                 self.maze.matrix[y][x + 1] = '|'
+            if "left" in walls:
+                self.maze.matrix[y - 1][x] = '-'
+            if "right" in walls:
                 self.maze.matrix[y + 1][x] = '-'
-                self.maze.matrix[y][x - 1] = '|'
-            elif self.measures.irSensor[1] >= value_to_detect and self.measures.irSensor[0] >= value_to_detect:
-                str = 'corner 5'
-                self.maze.matrix[y][x - 1] = '|'
+        elif compass == 90:  # Leste
+            if "front" in walls:
                 self.maze.matrix[y - 1][x] = '-'
-            elif self.measures.irSensor[2] >= value_to_detect and self.measures.irSensor[0] >= value_to_detect:
-                str = 'corner 6'
-                self.maze.matrix[y - 1][x] = '-'
+            if "left" in walls:
+                self.maze.matrix[y][x - 1] = '|'
+            if "right" in walls:
                 self.maze.matrix[y][x + 1] = '|'
-            elif self.measures.irSensor[2] >= value_to_detect and self.measures.irSensor[1] >= value_to_detect:
-                str = 'both walls'
+        elif compass == 180:  # Sul
+            if "front" in walls:
                 self.maze.matrix[y][x - 1] = '|'
-                self.maze.matrix[y][x + 1] = '|'
-            elif self.measures.irSensor[1] >= value_to_detect:
-                str = 'left wall'
-                self.maze.matrix[y][x - 1] = '|'
-            elif self.measures.irSensor[2] >= value_to_detect:
-                str = 'right wall'
-                self.maze.matrix[y][x + 1] = '|'
-            elif self.measures.irSensor[0] >= value_to_detect:
-                str = 'wall in front'
+            if "left" in walls:
+                self.maze.matrix[y + 1][x] = '-'
+            if "right" in walls:
                 self.maze.matrix[y - 1][x] = '-'
-
-        elif compass == 180:
-            if self.measures.irSensor[0] >= value_to_detect and self.measures.irSensor[1] >= value_to_detect and self.measures.irSensor[
-                2] >= value_to_detect:
-                str = 'deadend 15'
+        elif compass == -90:  # Oeste
+            if "front" in walls:
                 self.maze.matrix[y + 1][x] = '-'
-                self.maze.matrix[y - 1][x] = '-'
-                self.maze.matrix[y][x - 1] = '|'
-            elif self.measures.irSensor[1] >= value_to_detect and self.measures.irSensor[0] >= value_to_detect:
-                str = 'corner 7'
-                self.maze.matrix[y + 1][x] = '-'
-                self.maze.matrix[y][x - 1] = '|'
-            elif self.measures.irSensor[2] >= value_to_detect and self.measures.irSensor[0] >= value_to_detect:
-                str = 'corner 5'
-                self.maze.matrix[y - 1][x] = '-'
-                self.maze.matrix[y][x - 1] = '|'
-            elif self.measures.irSensor[1] >= value_to_detect and self.measures.irSensor[2] >= value_to_detect:
-                str = 'both walls'
-                self.maze.matrix[y - 1][x] = '-'
-                self.maze.matrix[y + 1][x] = '-'
-            elif self.measures.irSensor[1] >= value_to_detect:
-                str = 'left wall'
-                self.maze.matrix[y + 1][x] = '-'
-            elif self.measures.irSensor[2] >= value_to_detect:
-                str = 'right wall'
-                self.maze.matrix[y - 1][x] = '-'
-            elif self.measures.irSensor[0] >= value_to_detect:
-                str = 'wall in front'
-                self.maze.matrix[y][x - 1] = '|'
-
-        elif compass == -90:
-            if self.measures.irSensor[0] >= value_to_detect and self.measures.irSensor[1] >= value_to_detect and self.measures.irSensor[
-                2] >= value_to_detect:
-                str = 'deadend 12'
+            if "left" in walls:
                 self.maze.matrix[y][x + 1] = '|'
-                self.maze.matrix[y - 1][x] = '-'
+            if "right" in walls:
                 self.maze.matrix[y][x - 1] = '|'
-            elif self.measures.irSensor[1] >= value_to_detect and self.measures.irSensor[0] >= value_to_detect:
-                str = 'corner 8'
-                self.maze.matrix[y][x + 1] = '|'
-                self.maze.matrix[y + 1][x] = '-'
-            elif self.measures.irSensor[2] >= value_to_detect and self.measures.irSensor[0] >= value_to_detect:
-                str = 'corner 7'
-                self.maze.matrix[y][x - 1] = '|'
-                self.maze.matrix[y + 1][x] = '-'
-            elif self.measures.irSensor[2] >= value_to_detect and self.measures.irSensor[1] >= value_to_detect:
-                str = 'both walls'
-                self.maze.matrix[y][x - 1] = '|'
-                self.maze.matrix[y][x + 1] = '|'
-            elif self.measures.irSensor[1] >= value_to_detect:
-                str = 'left wall'
-                self.maze.matrix[y][x + 1] = '|'
-            elif self.measures.irSensor[2] >= value_to_detect:
-                str = 'right wall'
-                self.maze.matrix[y][x - 1] = '|'
-            elif self.measures.irSensor[0] >= value_to_detect:
-                str = 'wall in front'
-                self.maze.matrix[y + 1][x] = '-'
 
     def rotate(self, Kp, Kd, Ki, obj, retrot):
         if self.counterrot == 0:
@@ -666,7 +588,7 @@ class MyRob(CRobLinkAngs):
         robot_radius = 0.5
         distance_to_wall = 0.9
         difference_threshold = 2
-        value_to_front = 1.2
+        value_to_front = 1.3
         value_to_min_side = 0.4
         value_to_max_side = 2.0
         distance_threshold = 2.0
