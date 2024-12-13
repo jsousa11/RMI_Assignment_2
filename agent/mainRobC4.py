@@ -35,7 +35,7 @@ class MyRob(CRobLinkAngs):
         self.known_cells = []
         self.path = []
         self.searching = False
-        self.visited_cells = [(0, 0)]
+        self.track_visited_cells = [(0, 0)]
         self.pathfollowing = False
         self.haspath = False
         self.beacon_coordinates = [(0, 0)]
@@ -103,6 +103,7 @@ class MyRob(CRobLinkAngs):
                     self.setReturningLed(False)
                 self.wander()
 
+    # Função para fazer o robô andar
     def wander(self):
         self.measures.x = self.position_history[-1][0]
         self.measures.y = self.position_history[-1][1]
@@ -133,7 +134,7 @@ class MyRob(CRobLinkAngs):
                     self.searching = False
                 else:
                     x, y = (self.path[0][0] - loc[0]), (self.path[0][1] - loc[1])
-                    current = self.corrCompass()
+                    current = self.corrected_compass()
 
                     if x < 0:
                         self.rotation_target = 180
@@ -153,15 +154,15 @@ class MyRob(CRobLinkAngs):
 
             elif (center_sensor + back_sensor)/2 >= 1.0 and not self.pathfollowing:
                 self.searchUnknown()
-                self.whosFree()
+                self.find_free_direction()
                 self.onRot = True
                 self.first = False
             elif self.first:
-                if self.corrCompass() == 0:
+                if self.corrected_compass() == 0:
                     self.onRot = True
                     self.rotation_target = 180
                     self.searchUnknown()
-                elif self.corrCompass() == 180:
+                elif self.corrected_compass() == 180:
                     self.onRot = True
                     self.rotation_target = 0
                     self.searchUnknown()
@@ -215,6 +216,7 @@ class MyRob(CRobLinkAngs):
         else:
             self.endCycle = self.moveFront(0.1, 0.01, 0.00005)
 
+    # Função para usar o algoritmo de busca em largura
     def bfs(self, start, goal_list):
         min_len = inf
         min_idx = -1
@@ -243,37 +245,38 @@ class MyRob(CRobLinkAngs):
             end = goal_list[min_idx]
             return end
         else:
-            self.finalize_map_and_path()
+            self.complete_mapping_and_path()
 
-    def finalize_map_and_path(self):
+    def complete_mapping_and_path(self):
         if self.return_to_start:
             self.finish()
             sys.exit()
 
-        I = (0, 0)
-        self.beacon_coordinates.remove(I)
-        perms = list(itertools.permutations(self.beacon_coordinates))
-        path = []
-        k = []
-        for perm in perms:
-            perm = list(perm)
-            perm.insert(0, I)
-            perm.append(I)
-            k.append(perm)
+        initial_position = (0, 0)
+        self.beacon_coordinates.remove(initial_position)
+        permutations = list(itertools.permutations(self.beacon_coordinates))
+        self.final_path = []
 
-        for perm in k:
-            for i in range(0, len(perm) - 1):
-                path_segment, _ = bfs(self.maze.matrix, perm[i], perm[i + 1])
-                path.extend(path_segment[:-1])
-            if len(self.final_path) == 0 or len(path) <= len(self.final_path):
-                self.final_path = path
-            path = []
+        for perm in permutations:
+            path_segment = self.calculate_path(initial_position, perm)
+            if not self.final_path or len(path_segment) < len(self.final_path):
+                self.final_path = path_segment
 
-        self.final_path.append((0, 0))
+        self.final_path.append(initial_position)
         self.final_path = [p for p in self.final_path if p[0] % 2 == 0 and p[1] % 2 == 0]
         self.writePath()
         self.update_beacons_on_map()
 
+    def calculate_path(self, start, waypoints):
+        path = []
+        current_position = start
+        for waypoint in waypoints:
+            segment, _ = bfs(self.maze.matrix, current_position, waypoint)
+            path.extend(segment[:-1])
+            current_position = waypoint
+        return path
+
+    # Função para atualizar os beacons no mapa
     def update_beacons_on_map(self):
         self.maze.matrix[13][27] = '0'
         for beacon, num in zip(self.beacon_coordinates, self.beacon_nums):
@@ -282,6 +285,7 @@ class MyRob(CRobLinkAngs):
             self.maze.matrix[y][x] = str(num)
         self.writeMap()
 
+    # Função para escrever o mapa
     def writeMap(self):
         f = open(self.f + '.map', 'w+')
 
@@ -291,6 +295,7 @@ class MyRob(CRobLinkAngs):
             f.write('\n')
         f.close()
 
+    # Função para escrever o caminho
     def writePath(self):
         i = 0
         f = open(self.f + '.path', 'w+')
@@ -304,97 +309,81 @@ class MyRob(CRobLinkAngs):
         f.close()
 
     def moveFront(self, Kp, Kd, Ki):
-        current = self.corrCompass()
+        current = self.corrected_compass()
+        xin, yin = self.round_even(self.measures.x), self.round_even(self.measures.y)
+
         if current == 0:
-            if self.counter == 0:
-                xin = self.round_even(self.measures.x)
-                self.obj = xin + 2
-                self.lin = 0.14
-                self.integral = 0
-                self.reversing = False
+            self.initialize_movement(xin + 2, 0.14)
             err = self.obj - self.measures.x
         elif current == 90:
-            if self.counter == 0:
-                yin = self.round_even(self.measures.y)
-                self.obj = yin + 2
-                self.lin = 0.14
-                self.integral = 0
-                self.reversing = False
+            self.initialize_movement(yin + 2, 0.14)
             err = self.obj - self.measures.y
         elif current == 180:
-            if self.counter == 0:
-                xin = self.round_even(self.measures.x)
-                self.obj = xin - 2
-                self.lin = 0.14
-                self.integral = 0
-                self.reversing = True
+            self.initialize_movement(xin - 2, 0.14, reversing=True)
             err = -self.obj + self.measures.x
         elif current == -90:
-            if self.counter == 0:
-                yin = self.round_even(self.measures.y)
-                self.obj = yin - 2
-                self.lin = 0.14
-                self.integral = 0
-                self.reversing = True
+            self.initialize_movement(yin - 2, 0.14, reversing=True)
             err = -self.obj + self.measures.y
         else:
             err = 0
 
-        if self.lin != 0:
-            diff = err / self.lin
-        else:
-            diff = 100
+        diff = err / self.lin if self.lin != 0 else 100
         self.integral += err
         self.lin = Kp * err + Kd * diff + Ki * self.integral
         self.length = err
 
-        rotation_target = current
-        self.rotate(1, 0, 0, rotation_target, True)
+        self.rotate(1, 0, 0, current, True)
 
-        if self.lin > 0.14:
-            self.lin = 0.14
-        if self.rot > 0.15:
-            self.rot = 0.15
+        self.lin = min(self.lin, 0.14)
+        self.rot = min(self.rot, 0.15)
 
         self.converter(self.lin, self.rot)
         self.counter += 1
 
         if -0.11 < self.length < 0.11:
-
-            if self.measures.ground != -1 :
-                if (self.round_even(self.measures.x), self.round_even(self.measures.y)) not in self.beacon_coordinates:
-                    self.beacon_coordinates.append((self.round_even(self.measures.x), self.round_even(self.measures.y)))
-                    self.beacon_nums.append(self.measures.ground)
+            self.update_beacon_coordinates()
             self.counter = 0
-
-            if current == 0:
-                x = self.round_even(self.measures.x)
-                self.detect_walls(0, self.last_x + 2, self.last_y)
-                self.maze.matrix[self.last_y][self.last_x + 1] = 'X'
-                self.maze.matrix[self.last_y][self.last_x + 2] = 'X'
-                self.last_x = x + 27
-            elif current == 90:
-                y = self.round_even(self.measures.y)
-                self.detect_walls(90, self.last_x, self.last_y - 2)
-                self.maze.matrix[self.last_y - 1][self.last_x] = 'X'
-                self.maze.matrix[self.last_y - 2][self.last_x] = 'X'
-                self.last_y = -y + 13
-            elif current == 180:
-                x = self.round_even(self.measures.x)
-                self.detect_walls(180, self.last_x - 2, self.last_y)
-                self.maze.matrix[self.last_y][self.last_x - 1] = 'X'
-                self.maze.matrix[self.last_y][self.last_x - 2] = 'X'
-                self.last_x = x + 27
-            elif current == -90:
-                y = self.round_even(self.measures.y)
-                self.detect_walls(-90, self.last_x, self.last_y + 2)
-                self.maze.matrix[self.last_y + 1][self.last_x] = 'X'
-                self.maze.matrix[self.last_y + 2][self.last_x] = 'X'
-                self.last_y = -y + 13
-
+            self.update_maze(current, xin, yin)
             return True
         return False
 
+    def initialize_movement(self, obj_value, lin_value, reversing=False):
+        if self.counter == 0:
+            self.obj = obj_value
+            self.lin = lin_value
+            self.integral = 0
+            self.reversing = reversing
+
+    def update_beacon_coordinates(self):
+        if self.measures.ground != -1:
+            coord = (self.round_even(self.measures.x), self.round_even(self.measures.y))
+            if coord not in self.beacon_coordinates:
+                self.beacon_coordinates.append(coord)
+                self.beacon_nums.append(self.measures.ground)
+
+    def update_maze(self, current, xin, yin):
+        if current == 0:
+            self.detect_walls(0, self.last_x + 2, self.last_y)
+            self.maze.matrix[self.last_y][self.last_x + 1] = 'X'
+            self.maze.matrix[self.last_y][self.last_x + 2] = 'X'
+            self.last_x = xin + 27
+        elif current == 90:
+            self.detect_walls(90, self.last_x, self.last_y - 2)
+            self.maze.matrix[self.last_y - 1][self.last_x] = 'X'
+            self.maze.matrix[self.last_y - 2][self.last_x] = 'X'
+            self.last_y = -yin + 13
+        elif current == 180:
+            self.detect_walls(180, self.last_x - 2, self.last_y)
+            self.maze.matrix[self.last_y][self.last_x - 1] = 'X'
+            self.maze.matrix[self.last_y][self.last_x - 2] = 'X'
+            self.last_x = xin + 27
+        elif current == -90:
+            self.detect_walls(-90, self.last_x, self.last_y + 2)
+            self.maze.matrix[self.last_y + 1][self.last_x] = 'X'
+            self.maze.matrix[self.last_y + 2][self.last_x] = 'X'
+            self.last_y = -yin + 13
+
+    # Função para detectar paredes
     def detect_walls(self, compass, x, y):
         value_to_detect = 1.2
         ir_sensors = self.measures.irSensor  # Sensores infravermelhos
@@ -407,7 +396,6 @@ class MyRob(CRobLinkAngs):
         if ir_sensors[2] >= value_to_detect:  # Objeto à direita
             walls.append("right")
 
-        # Atualizar a matriz do labirinto com base na orientação e paredes detectadas
         if compass == 0:  # Norte
             if "front" in walls:
                 self.maze.matrix[y][x + 1] = '|'
@@ -437,6 +425,7 @@ class MyRob(CRobLinkAngs):
             if "right" in walls:
                 self.maze.matrix[y][x - 1] = '|'
 
+    # Função para rodar o robô
     def rotate(self, Kp, Kd, Ki, obj, retrot):
         if self.counterrot == 0:
             self.rot = 0.15
@@ -461,8 +450,9 @@ class MyRob(CRobLinkAngs):
             self.counterrot = 0
             return False
         return True
-
-    def corrCompass(self):
+    
+    # Função para corrigir a bússola
+    def corrected_compass(self):
         current = self.measures.compass
         if -45 < current < 45:
             current = 0
@@ -475,14 +465,16 @@ class MyRob(CRobLinkAngs):
 
         return current
 
+    # Função para comparar a bússola com a direção correta
     def compare_compass(self):
         current = self.measures.compass
-        rotation_target = self.corrCompass()
+        rotation_target = self.corrected_compass()
         difference = abs(rotation_target - current)
-        return difference
+        return difference   
 
-    def whosFree(self):
-        current = self.corrCompass()
+    # Função que encontra uma direção que esteja livre
+    def find_free_direction(self):
+        current = self.corrected_compass()
 
         if self.measures.irSensor[1] < 1:
             self.rotation_target = current + 90
@@ -496,6 +488,7 @@ class MyRob(CRobLinkAngs):
         if self.rotation_target > 180:
             self.rotation_target -= 360
 
+    # Converte as coordenadas do GPS com base no ponto inicial
     def gpsConverter(self):
         if self.countergps == 0:
             self.xin = self.measures.x
@@ -503,22 +496,24 @@ class MyRob(CRobLinkAngs):
             self.countergps += 1
         self.measures.x -= self.xin
         self.measures.y -= self.yin
-
+    
     def checkChangeCompass(self):
         if self.rotation_target == 180:
             self.South = True
         else:
             self.South = False
 
+    # Regista a celula atual como visitada  
     def appendWalked(self):
         x = self.round_even(self.measures.x)
         y = self.round_even(self.measures.y)
-        self.visited_cells.append((x, y))
+        self.track_visited_cells.append((x, y))
 
+    # Identifica celulas desconhecidas proximas
     def searchUnknown(self):
         x = self.round_even(self.measures.x)
         y = self.round_even(self.measures.y)
-        current = radians(self.corrCompass())
+        current = radians(self.corrected_compass())
         entries = []
 
         if self.measures.irSensor[0] < 1:
@@ -532,11 +527,12 @@ class MyRob(CRobLinkAngs):
             if entry not in self.unknown_cells and entry not in self.known_cells:
                 self.unknown_cells.append(entry)
 
+    # Atualiza listas de celulas conhecidas e desconhecidas
     def searchKnown(self):
         x = self.round_even(self.measures.x)
         y = self.round_even(self.measures.y)
         entry = (x, y)
-        last_entry = self.visited_cells[-2]
+        last_entry = self.track_visited_cells[-2]
         mid_entry = (int((last_entry[0] + entry[0]) / 2), (int((last_entry[1] + entry[1]) / 2)))
         equal = last_entry == mid_entry
         if entry in self.unknown_cells:
@@ -557,6 +553,7 @@ class MyRob(CRobLinkAngs):
         self.estimated_velocity.append((left_out, right_out))
         self.kinematics()
 
+    # Calcula a nova posição global do robô
     def kinematics(self):
         wheel_velocity = np.transpose(np.asarray(self.estimated_velocity[-1]))
         velocity_matrix = np.asarray([[1 / 2, 1 / 2], [-1 / 2, 1 / 2]])
@@ -576,6 +573,7 @@ class MyRob(CRobLinkAngs):
     def distance(self, x):
         return 1 / x
 
+    # Ajusta a posição do robô com base na proximidade de paredes
     def corrector(self, last_pose):
         current_pose = None
         wall = None
@@ -588,13 +586,13 @@ class MyRob(CRobLinkAngs):
         robot_radius = 0.5
         distance_to_wall = 0.9
         difference_threshold = 2
-        value_to_front = 1.3
+        value_to_front = 1.5
         value_to_min_side = 0.4
         value_to_max_side = 2.0
         distance_threshold = 2.0
 
         if self.compare_compass() <= difference_threshold:
-            if self.corrCompass() == 0:
+            if self.corrected_compass() == 0:
                 if center >= value_to_front and back >= value_to_front:
                     wall = self.round_even(last_pose[0]) + distance_to_wall, last_pose[1]
                     current_pose = (wall[0] - self.distance((center + back)/2) - robot_radius, last_pose[1])
@@ -609,7 +607,7 @@ class MyRob(CRobLinkAngs):
                     current_pose = (last_pose[0], wall[1] + self.distance(right) + robot_radius)
                     direction = direction + 'Right'
 
-            elif self.corrCompass() == 90:
+            elif self.corrected_compass() == 90:
                 if center >= value_to_front and back >= value_to_front:
                     wall = last_pose[0], self.round_even(last_pose[1]) + distance_to_wall
                     current_pose = (last_pose[0], wall[1] - self.distance((center + back)/2) - robot_radius)
@@ -624,7 +622,7 @@ class MyRob(CRobLinkAngs):
                     current_pose = (wall[0] - self.distance(right) - robot_radius, last_pose[1])
                     direction = direction + 'Right'
 
-            elif self.corrCompass() == 180:
+            elif self.corrected_compass() == 180:
                 if center >= value_to_front and back >= value_to_front:
                     wall = self.round_even(last_pose[0]) - distance_to_wall, last_pose[1]
                     current_pose = (wall[0] + self.distance((center + back)/2) + robot_radius, last_pose[1])
@@ -639,7 +637,7 @@ class MyRob(CRobLinkAngs):
                     current_pose = (last_pose[0], wall[1] - self.distance(right) - robot_radius)
                     direction = direction + 'Right'
 
-            elif self.corrCompass() == -90:
+            elif self.corrected_compass() == -90:
                 if center >= value_to_front and back >= value_to_front:
                     wall = last_pose[0], self.round_even(last_pose[1]) - distance_to_wall
                     current_pose = (last_pose[0], wall[1] + self.distance((center + back)/2) + robot_radius)
@@ -669,7 +667,6 @@ class MyRob(CRobLinkAngs):
         else:
             return round(number/2)*2 - 1
 
-
     def converter(self, lin, rot):
         left_motor = lin - rot / 2
         right_motor = lin + rot / 2
@@ -685,7 +682,6 @@ class MyRob(CRobLinkAngs):
             self.velEstimator(left_motor, right_motor)
         self.driveMotors(left_motor, right_motor)
 
-
 class Lab():
     def __init__(self):
         self.matrix = [[' '] * 55]
@@ -693,7 +689,6 @@ class Lab():
         for m in range(26):
             self.matrix.insert(0, [' '] * 55)
         self.matrix[13][27] = 'I'
-
 
 class Map():
     def __init__(self, filename):
@@ -721,7 +716,6 @@ class Map():
                             None
 
             i = i + 1
-
 
 rob_name = "pClient1"
 host = "localhost"
